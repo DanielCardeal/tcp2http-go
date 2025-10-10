@@ -1,41 +1,44 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"strings"
 )
 
 const SERVER_PORT = ":42069"
 
 func getLinesChannel(f io.ReadCloser) <-chan string {
-	c := make(chan string)
+	out := make(chan string)
 
 	go func() {
-		defer close(c)
 		defer f.Close()
+		defer close(out)
 
-		readBuff := make([]byte, 8)
 		currentLine := ""
-		n, err := f.Read(readBuff)
-		for err != io.EOF {
-			segments := strings.Split(string(readBuff[:n]), "\n")
-			currentLine += segments[0]
-			if len(segments) > 1 {
-				c <- currentLine
-				var i int
-				for i = 1; i < len(segments)-1; i++ {
-					c <- segments[i]
-				}
-				currentLine = segments[i]
+		for {
+			buff := make([]byte, 8)
+			n, err := f.Read(buff)
+			if err != nil {
+				break
 			}
-			n, err = f.Read(readBuff)
+
+			buff = buff[:n]
+			if i := bytes.IndexByte(buff, '\n'); i != -1 {
+				currentLine += string(buff[:i])
+				buff = buff[i+1:]
+				out <- currentLine
+				currentLine = ""
+
+			}
+			currentLine += string(buff)
 		}
+		out <- currentLine
 	}()
 
-	return c
+	return out
 }
 
 func main() {
@@ -54,8 +57,8 @@ func main() {
 			continue
 		}
 		log.Printf("Connection accepted from %s", conn.RemoteAddr())
-		c := getLinesChannel(conn)
-		for line := range c {
+
+		for line := range getLinesChannel(conn) {
 			fmt.Println(line)
 		}
 	}
