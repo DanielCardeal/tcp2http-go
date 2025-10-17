@@ -9,8 +9,8 @@ import (
 type ParserState int
 
 const (
-	PARSER_STATE_INITIALIZED ParserState = iota
-	PARSER_STATE_DONE
+	StateInitialized ParserState = iota
+	StateDone
 )
 
 type RequestLine struct {
@@ -40,7 +40,9 @@ func parseRequestLine(b []byte) (*RequestLine, int, error) {
 	if idx == -1 {
 		return nil, 0, nil
 	}
+
 	requestLine := b[:idx]
+	read := idx + len(SEPARATOR)
 
 	fields := bytes.Split(requestLine, []byte(" "))
 	if len(fields) != 3 {
@@ -49,8 +51,8 @@ func parseRequestLine(b []byte) (*RequestLine, int, error) {
 
 	versionParts := bytes.Split(fields[2], []byte("/"))
 	if len(versionParts) != 2 ||
-		!bytes.Equal(versionParts[0], []byte("HTTP")) ||
-		!bytes.Equal(versionParts[1], []byte("1.1")) {
+		string(versionParts[0]) != "HTTP" ||
+		string(versionParts[1]) != "1.1" {
 		return nil, 0, ERROR_MALFORMED_REQUEST_LINE
 	}
 
@@ -63,20 +65,20 @@ func parseRequestLine(b []byte) (*RequestLine, int, error) {
 		return nil, 0, ERROR_INVALID_HTTP_METHOD
 	}
 
-	return r, idx, nil
+	return r, read, nil
 }
 
 func (r *Request) parse(data []byte) (int, error) {
 	switch r.state {
-	case PARSER_STATE_INITIALIZED:
+	case StateInitialized:
 		rl, n, err := parseRequestLine(data)
 		if err != nil || n == 0 {
 			return 0, err
 		}
 		r.RequestLine = *rl
-		r.state = PARSER_STATE_DONE
+		r.state = StateDone
 		return n, err
-	case PARSER_STATE_DONE:
+	case StateDone:
 		return 0, nil
 	default:
 		return 0, ERROR_UNKNOWN_PARSER_STATE
@@ -87,7 +89,7 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 	var request Request
 	data := make([]byte, 0, 4096)
 	readBuff := make([]byte, 4096)
-	for request.state != PARSER_STATE_DONE {
+	for request.state != StateDone {
 		n, err := reader.Read(readBuff)
 		if err != nil {
 			return nil, err

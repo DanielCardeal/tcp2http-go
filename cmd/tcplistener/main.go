@@ -1,45 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"net"
+
+	"github.com/DanielCardeal/tcp2http-go/internal/request"
 )
 
 const SERVER_PORT = ":42069"
-
-func getLinesChannel(f io.ReadCloser) <-chan string {
-	out := make(chan string)
-
-	go func() {
-		defer f.Close()
-		defer close(out)
-
-		currentLine := ""
-		for {
-			buff := make([]byte, 8)
-			n, err := f.Read(buff)
-			if err != nil {
-				break
-			}
-
-			buff = buff[:n]
-			if i := bytes.IndexByte(buff, '\n'); i != -1 {
-				currentLine += string(buff[:i])
-				buff = buff[i+1:]
-				out <- currentLine
-				currentLine = ""
-
-			}
-			currentLine += string(buff)
-		}
-		out <- currentLine
-	}()
-
-	return out
-}
 
 func main() {
 	ln, err := net.Listen("tcp", SERVER_PORT)
@@ -58,8 +27,16 @@ func main() {
 		}
 		log.Printf("Connection accepted from %s", conn.RemoteAddr())
 
-		for line := range getLinesChannel(conn) {
-			fmt.Println(line)
+		req, err := request.RequestFromReader(conn)
+		if err != nil {
+			log.Printf("failed to parse http request from %s: %s", conn.RemoteAddr(), err)
+			conn.Close()
+			continue
 		}
+		fmt.Println("Request line:")
+		fmt.Printf("- Method: %s\n", req.RequestLine.Method)
+		fmt.Printf("- Target: %s\n", req.RequestLine.RequestTarget)
+		fmt.Printf("- Version: %s\n", req.RequestLine.HttpVersion)
+		conn.Close()
 	}
 }
