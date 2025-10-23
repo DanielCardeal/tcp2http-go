@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+
+	"github.com/DanielCardeal/tcp2http-go/internal/headers"
 )
 
 type ParserState int
 
 const (
 	StateInitialized ParserState = iota
+	StateHeaders
 	StateDone
 )
 
@@ -21,18 +24,32 @@ type RequestLine struct {
 
 type Request struct {
 	RequestLine RequestLine
-	state       ParserState
+	Headers     headers.Headers
+}
+
+type requestParser struct {
+	request *Request
+	state   ParserState
+
+	data []byte
+	pos  int
 }
 
 var SEPARATOR = []byte("\r\n")
 
-var ERROR_MALFORMED_REQUEST_LINE = fmt.Errorf("malformed request line")
-var ERROR_UNSUPPORTED_HTTP_VERSION = fmt.Errorf("unsupported HTTP version")
-var ERROR_INVALID_HTTP_METHOD = fmt.Errorf("unknown HTTP method")
-var ERROR_UNKNOWN_PARSER_STATE = fmt.Errorf("unknown parser state")
+var ErrorIncompleteRequest = fmt.Errorf("incomplete request")
+var ErrorMalformedRequestLine = fmt.Errorf("malformed request line")
+var ErrorUnsupportedHTTPVersion = fmt.Errorf("unsupported HTTP version")
+var ErrorInvalidHTTPMethod = fmt.Errorf("unknown HTTP method")
+var ErrorUnknownParserState = fmt.Errorf("unknown parser state")
 
-func (r *RequestLine) ValidMethod() bool {
-	return r.Method == "GET" || r.Method == "POST" || r.Method == "PUT" || r.Method == "DELETE"
+func validHttpMethod(method string) bool {
+	switch method {
+	case "GET", "POST", "PUT", "DELETE":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseRequestLine(b []byte) (*RequestLine, int, error) {
@@ -46,14 +63,18 @@ func parseRequestLine(b []byte) (*RequestLine, int, error) {
 
 	fields := bytes.Split(requestLine, []byte(" "))
 	if len(fields) != 3 {
-		return nil, 0, ERROR_MALFORMED_REQUEST_LINE
+		return nil, 0, ErrorMalformedRequestLine
 	}
 
 	versionParts := bytes.Split(fields[2], []byte("/"))
 	if len(versionParts) != 2 ||
 		string(versionParts[0]) != "HTTP" ||
 		string(versionParts[1]) != "1.1" {
-		return nil, 0, ERROR_MALFORMED_REQUEST_LINE
+		return nil, 0, ErrorMalformedRequestLine
+	}
+
+	if !validHttpMethod(string(fields[0])) {
+		return nil, 0, ErrorInvalidHTTPMethod
 	}
 
 	r := &RequestLine{
@@ -61,54 +82,73 @@ func parseRequestLine(b []byte) (*RequestLine, int, error) {
 		RequestTarget: string(fields[1]),
 		HttpVersion:   string(versionParts[1]),
 	}
-	if !r.ValidMethod() {
-		return nil, 0, ERROR_INVALID_HTTP_METHOD
-	}
 
 	return r, read, nil
 }
 
-func (r *Request) parse(data []byte) (int, error) {
-	switch r.state {
-	case StateInitialized:
-		rl, n, err := parseRequestLine(data)
-		if err != nil || n == 0 {
-			return 0, err
+func newRequest() *Request {
+	return &Request{Headers: *headers.NewHeaders()}
+}
+
+func newRequestParser() *requestParser {
+	return &requestParser{
+		request: newRequest(),
+		state:   StateInitialized,
+		data:    make([]byte, 0, 4096),
+		pos:     0,
+	}
+}
+
+func (p *requestParser) finished() bool {
+	return p.state == StateDone
+}
+
+func (p *requestParser) parse(newData []byte) error {
+	p.data = append(p.data, newData...)
+
+	for {
+		switch p.state {
+		case StateInitialized:
+			rl, n, err := parseRequestLine(p.data[p.pos:])
+			if err != nil || n == 0 {
+				return err
+			}
+			p.request.RequestLine = *rl
+			p.state = StateHeaders
+			p.pos += n
+		case StateHeaders:
+			n, done, err := p.request.Headers.Parse(p.data[p.pos:])
+			if err != nil || n == 0 {
+				return err
+			}
+			p.pos += n
+			if done {
+				p.state = StateDone
+			}
+		case StateDone:
+			return nil
+		default:
+			return ErrorUnknownParserState
 		}
-		r.RequestLine = *rl
-		r.state = StateDone
-		return n, err
-	case StateDone:
-		return 0, nil
-	default:
-		return 0, ERROR_UNKNOWN_PARSER_STATE
 	}
 }
 
 func RequestFromReader(reader io.Reader) (*Request, error) {
-	var request Request
-	data := make([]byte, 0, 4096)
 	readBuff := make([]byte, 4096)
-	for request.state != StateDone {
+	reqParser := newRequestParser()
+	for !reqParser.finished() {
 		n, err := reader.Read(readBuff)
 		if err != nil {
-			return nil, err
+			return nil, ErrorIncompleteRequest
 		}
 		if n == 0 {
 			continue
 		}
-		data = append(data, readBuff[:n]...)
 
-		n, err = request.parse(data)
+		err = reqParser.parse(readBuff[:n])
 		if err != nil {
 			return nil, err
 		}
-		if n != 0 {
-			newData := make([]byte, 0, len(data[n:]))
-			copy(newData, data[n:])
-			data = newData
-		}
 	}
-
-	return &request, nil
+	return reqParser.request, nil
 }

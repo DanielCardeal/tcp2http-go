@@ -27,7 +27,7 @@ func (cr *chunkReader) Read(p []byte) (n int, err error) {
 	return n, nil
 }
 
-func Test_Empty_Target_Success(t *testing.T) {
+func Test_Standard_Get_Success(t *testing.T) {
 	r, err := RequestFromReader(&chunkReader{
 		data:            "GET / HTTP/1.1\r\nHost: localhost:42069\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n",
 		numBytesPerRead: 3,
@@ -37,6 +37,9 @@ func Test_Empty_Target_Success(t *testing.T) {
 	assert.Equal(t, "GET", r.RequestLine.Method)
 	assert.Equal(t, "/", r.RequestLine.RequestTarget)
 	assert.Equal(t, "1.1", r.RequestLine.HttpVersion)
+	assert.Equal(t, r.Headers.Get("Host"), "localhost:42069")
+	assert.Equal(t, r.Headers.Get("User-Agent"), "curl/7.81.0")
+	assert.Equal(t, r.Headers.Get("Accept"), "*/*")
 }
 
 func Test_Non_Empty_Target_Success(t *testing.T) {
@@ -63,9 +66,47 @@ func Test_Empty_Body_Post_Success(t *testing.T) {
 	assert.Equal(t, "1.1", r.RequestLine.HttpVersion)
 }
 
+func Test_Case_Insensitive_Headers_Success(t *testing.T) {
+	r, err := RequestFromReader(&chunkReader{
+		data:            "GET / HTTP/1.1\r\nHOST: localhost:42069\r\nuser-agent: curl/7.81.0\r\n\r\n",
+		numBytesPerRead: 3,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	assert.Equal(t, r.Headers.Get("host"), "localhost:42069")
+	assert.Equal(t, r.Headers.Get("USER-AGENT"), "curl/7.81.0")
+}
+
+func Test_Empty_Headers_Success(t *testing.T) {
+	r, err := RequestFromReader(&chunkReader{
+		data:            "GET / HTTP/1.1\r\n\r\n",
+		numBytesPerRead: 3,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, r)
+}
+
+func Test_Duplicate_Headers_Success(t *testing.T) {
+	r, err := RequestFromReader(&chunkReader{
+		data:            "GET / HTTP/1.1\r\nAdd-User: daniel\r\nAdd-User: miguel\r\n\r\n",
+		numBytesPerRead: 3,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	assert.Equal(t, r.Headers.Get("Add-User"), "daniel,miguel")
+}
+
 func Test_Unsuported_HTTP_Version_Failure(t *testing.T) {
 	_, err := RequestFromReader(&chunkReader{
 		data:            "GET /coffee HTTP/2.1\r\nHost: localhost:42069\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n",
+		numBytesPerRead: 3,
+	})
+	require.Error(t, err)
+}
+
+func Test_Missing_End_Of_Headers_Failure(t *testing.T) {
+	_, err := RequestFromReader(&chunkReader{
+		data:            "GET / HTTP/1.1\r\nHost: localhost:42069\r\n",
 		numBytesPerRead: 3,
 	})
 	require.Error(t, err)
@@ -75,6 +116,14 @@ func Test_Missing_Request_Line_Parts_Failure(t *testing.T) {
 	_, err := RequestFromReader(&chunkReader{
 		data:            "/coffee HTTP/1.1\r\nHost: localhost:42069\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n",
 		numBytesPerRead: 3,
+	})
+	require.Error(t, err)
+}
+
+func Test_Malformed_Header_Failure(t *testing.T) {
+	_, err := RequestFromReader(&chunkReader{
+		data:            "GET / HTTP/1.1\r\nHost localhost:42069\r\n\r\n",
+		numBytesPerRead: 4,
 	})
 	require.Error(t, err)
 }
