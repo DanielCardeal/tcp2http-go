@@ -15,12 +15,25 @@ type Headers struct {
 	headers map[string]string
 }
 
+type HeaderEntry struct {
+	Name  string
+	Value string
+}
+
 func NewHeaders() *Headers {
 	return &Headers{headers: make(map[string]string)}
 }
 
 func (h *Headers) Get(name string) string {
 	return h.headers[strings.ToLower(name)]
+}
+
+func (h *Headers) Entries() []HeaderEntry {
+	l := make([]HeaderEntry, 0, len(h.headers))
+	for k, v := range h.headers {
+		l = append(l, HeaderEntry{Name: k, Value: v})
+	}
+	return l
 }
 
 func (h *Headers) set(name, value string) {
