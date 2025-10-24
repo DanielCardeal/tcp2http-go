@@ -41,6 +41,8 @@ func main() {
 		for _, entry := range req.Headers.Entries() {
 			fmt.Printf("- %s: %s\n", entry.Name, entry.Value)
 		}
+		fmt.Println("Body:")
+		fmt.Println(string(req.Body))
 
 		conn.Close()
 	}
