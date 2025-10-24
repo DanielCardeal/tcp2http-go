@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
+	"strconv"
 
 	"github.com/DanielCardeal/tcp2http-go/internal/headers"
 )
@@ -12,7 +14,9 @@ type ParserState int
 
 const (
 	StateInitialized ParserState = iota
-	StateHeaders
+	StateParsingRequestLine
+	StateParsingHeaders
+	StateParsingBody
 	StateDone
 )
 
@@ -25,6 +29,7 @@ type RequestLine struct {
 type Request struct {
 	RequestLine RequestLine
 	Headers     headers.Headers
+	Body        []byte
 }
 
 type requestParser struct {
@@ -42,6 +47,7 @@ var ErrorMalformedRequestLine = fmt.Errorf("malformed request line")
 var ErrorUnsupportedHTTPVersion = fmt.Errorf("unsupported HTTP version")
 var ErrorInvalidHTTPMethod = fmt.Errorf("unknown HTTP method")
 var ErrorUnknownParserState = fmt.Errorf("unknown parser state")
+var ErrorContentLenghtNaN = fmt.Errorf("request content-length is not a number")
 
 func validHttpMethod(method string) bool {
 	switch method {
@@ -87,7 +93,7 @@ func parseRequestLine(b []byte) (*RequestLine, int, error) {
 }
 
 func newRequest() *Request {
-	return &Request{Headers: *headers.NewHeaders()}
+	return &Request{Headers: *headers.NewHeaders(), Body: make([]byte, 0)}
 }
 
 func newRequestParser() *requestParser {
@@ -107,25 +113,51 @@ func (p *requestParser) parse(newData []byte) error {
 	p.data = append(p.data, newData...)
 
 	for {
+		data := p.data[p.pos:]
 		switch p.state {
 		case StateInitialized:
-			rl, n, err := parseRequestLine(p.data[p.pos:])
+			p.state = StateParsingRequestLine
+		case StateParsingRequestLine:
+			rl, n, err := parseRequestLine(data)
 			if err != nil || n == 0 {
 				return err
 			}
 			p.request.RequestLine = *rl
-			p.state = StateHeaders
+			p.state = StateParsingHeaders
 			p.pos += n
-		case StateHeaders:
-			n, done, err := p.request.Headers.Parse(p.data[p.pos:])
+		case StateParsingHeaders:
+			n, done, err := p.request.Headers.Parse(data)
 			if err != nil || n == 0 {
 				return err
 			}
 			p.pos += n
 			if done {
+				p.state = StateParsingBody
+			}
+		case StateParsingBody:
+			contentLenRaw := p.request.Headers.Get("Content-Length")
+			if contentLenRaw == "" || contentLenRaw == "0" {
+				p.state = StateDone
+				continue
+			}
+
+			contentLen, err := strconv.Atoi(contentLenRaw)
+			if err != nil {
+				return ErrorContentLenghtNaN
+			}
+
+			n := min(contentLen-len(p.request.Body), len(data))
+			p.request.Body = append(p.request.Body, data[:n]...)
+			p.pos += n
+			if len(p.request.Body) < contentLen {
+				return nil
+			} else {
 				p.state = StateDone
 			}
 		case StateDone:
+			if len(data) > 0 {
+				log.Printf("extra bytes received after end of message")
+			}
 			return nil
 		default:
 			return ErrorUnknownParserState

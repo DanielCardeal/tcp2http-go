@@ -54,16 +54,78 @@ func Test_Non_Empty_Target_Success(t *testing.T) {
 	assert.Equal(t, "1.1", r.RequestLine.HttpVersion)
 }
 
-func Test_Empty_Body_Post_Success(t *testing.T) {
+func Test_Standard_Post_Success(t *testing.T) {
+	const BODY = `{"key":"value","pair":true}` + "\n"
 	r, err := RequestFromReader(&chunkReader{
-		data:            "POST /coffee HTTP/1.1\r\nHost: localhost:42069\r\nUser-Agent: curl/7.81.0\r\nAccept: */*\r\n\r\n",
+		data: "POST / HTTP/1.1\r\n" +
+			"Content-Length: 28\r\n" +
+			"\r\n" +
+			BODY,
 		numBytesPerRead: 5,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, r)
-	assert.Equal(t, "POST", r.RequestLine.Method)
-	assert.Equal(t, "/coffee", r.RequestLine.RequestTarget)
-	assert.Equal(t, "1.1", r.RequestLine.HttpVersion)
+	assert.Equal(t, "28", r.Headers.Get("Content-Length"))
+	assert.Equal(t, BODY, string(r.Body))
+}
+
+func Test_Zeroed_Content_Lenght_Empty_Body_Success(t *testing.T) {
+	r, err := RequestFromReader(&chunkReader{
+		data: "POST /coffee HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"User-Agent: curl/7.81.0\r\n" +
+			"Content-Length: 0\r\n" +
+			"\r\n",
+		numBytesPerRead: 5,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	assert.Equal(t, "0", r.Headers.Get("Content-Length"))
+	assert.Empty(t, r.Body)
+}
+
+func Test_No_Content_Lenght_Empty_Body_Success(t *testing.T) {
+	r, err := RequestFromReader(&chunkReader{
+		data: "POST /coffee HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"User-Agent: curl/7.81.0\r\n" +
+			"\r\n",
+		numBytesPerRead: 5,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	assert.Empty(t, r.Body)
+}
+
+func Test_Long_Body_Success(t *testing.T) {
+	r, err := RequestFromReader(&chunkReader{
+		data: "POST / HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"User-Agent: curl/7.81.0\r\n" +
+			"Content-Length: 16\r\n" +
+			"\r\n" +
+			"x's will be gonexxxxxxxxxxxxx",
+		numBytesPerRead: 1,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	assert.Equal(t, "16", r.Headers.Get("Content-Length"))
+	assert.Equal(t, "x's will be gone", string(r.Body))
+}
+
+func Test_Missing_Content_Length_Success(t *testing.T) {
+	r, err := RequestFromReader(&chunkReader{
+		data: "POST / HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"User-Agent: curl/7.81.0\r\n" +
+			"\r\n" +
+			"this will be ignored (aka not parsed)",
+		numBytesPerRead: 20,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	assert.Empty(t, r.Headers.Get("Content-Length"))
+	assert.Empty(t, r.Body)
 }
 
 func Test_Case_Insensitive_Headers_Success(t *testing.T) {
@@ -124,6 +186,17 @@ func Test_Malformed_Header_Failure(t *testing.T) {
 	_, err := RequestFromReader(&chunkReader{
 		data:            "GET / HTTP/1.1\r\nHost localhost:42069\r\n\r\n",
 		numBytesPerRead: 4,
+	})
+	require.Error(t, err)
+}
+
+func Test_Short_Body_Failure(t *testing.T) {
+	_, err := RequestFromReader(&chunkReader{
+		data: "POST / HTTP/1.1\r\n" +
+			"Content-Length: 512\r\n" +
+			"\r\n" +
+			"too short lol",
+		numBytesPerRead: 12,
 	})
 	require.Error(t, err)
 }
